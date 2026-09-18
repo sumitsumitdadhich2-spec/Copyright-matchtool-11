@@ -721,6 +721,18 @@ export interface ModelLiveState {
   usedToday: number
 }
 
+export interface KeyLaneModelLiveState {
+  id: string
+  state: 'idle' | 'active' | 'cooling' | 'exhausted' | 'waiting'
+}
+
+export interface KeyLaneLiveState {
+  idx: number
+  status: 'idle' | 'active' | 'error' | 'exhausted'
+  lastError?: string
+  models: KeyLaneModelLiveState[]
+}
+
 export interface ScanReport {
   totalScanTimeMs: number
   chunksScanned: number
@@ -825,6 +837,7 @@ export interface Scan {
   error: string | null
   report: ScanReport | null
   modelStates: Record<string, ModelLiveState>
+  keyLanes?: KeyLaneLiveState[]
 }
 
 export interface ScanSummary {

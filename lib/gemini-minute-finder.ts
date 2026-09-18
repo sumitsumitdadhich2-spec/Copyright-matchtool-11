@@ -879,7 +879,7 @@ async function ensureSanitizedShortUpload(
   }
 
   log(id, 'info', `Key ${lane.keyIdx}: uploading sanitized short video copy to Gemini Files API...`)
-  const up = await uploadVideo(lane.ai, sanitizedFile, 'video/mp4', 'prescan-short-sanitized')
+  const up = await uploadVideo(lane.ai, sanitizedFile)
   if (ctrl.state.uploads[lane.keyId]) {
     ctrl.state.uploads[lane.keyId].sanitizedShortUri = up.uri
     ctrl.state.uploads[lane.keyId].sanitizedShortName = up.name
@@ -912,7 +912,7 @@ async function ensureSanitizedBackupClipUpload(
   }
 
   log(id, 'info', `Key ${lane.keyIdx}: uploading sanitized backup clip copy to Gemini Files API...`)
-  const up = await uploadVideo(lane.ai, sanitizedClipFile, 'video/mp4', 'backup-clip-sanitized')
+  const up = await uploadVideo(lane.ai, sanitizedClipFile)
   if (ctrl.state.backup) {
     if (!ctrl.state.backup.uploads) ctrl.state.backup.uploads = {}
     const existing = ctrl.state.backup.uploads[lane.keyId] || { uri: up.uri, name: up.name, uploadedAt: Date.now() }

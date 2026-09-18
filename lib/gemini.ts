@@ -179,9 +179,12 @@ async function uploadResumableWithProgress(
   apiKey: string,
   filePath: string,
   ai: GoogleGenAI,
-  onProgress?: (p: UploadProgress) => void,
-  isStopping?: () => boolean,
+  onProgress?: ((p: UploadProgress) => void) | unknown,
+  isStopping?: (() => boolean) | unknown,
 ): Promise<{ uri: string; name: string }> {
+  const safeProgress = typeof onProgress === 'function' ? (onProgress as (p: UploadProgress) => void) : undefined
+  const safeStopping = typeof isStopping === 'function' ? (isStopping as () => boolean) : undefined
+
   const stat = await fs.promises.stat(filePath)
   const fileSize = stat.size
   const fileName = path.basename(filePath)
@@ -224,7 +227,7 @@ async function uploadResumableWithProgress(
 
   try {
     while (offset < fileSize) {
-      if (isStopping && isStopping()) throw new Error('Upload cancelled')
+      if (safeStopping && safeStopping()) throw new Error('Upload cancelled')
       const chunkSize = Math.min(CHUNK_SIZE, fileSize - offset)
       const isFinal = offset + chunkSize >= fileSize
       const buffer = Buffer.alloc(chunkSize)
@@ -235,7 +238,7 @@ async function uploadResumableWithProgress(
 
       let chunkRes: Response | null = null
       for (let attempt = 1; attempt <= 4; attempt++) {
-        if (isStopping && isStopping()) throw new Error('Upload cancelled')
+        if (safeStopping && safeStopping()) throw new Error('Upload cancelled')
         try {
           chunkRes = await fetch(uploadUrl, {
             method: 'POST',
@@ -263,7 +266,7 @@ async function uploadResumableWithProgress(
       const speedStr = (speedBps / (1024 * 1024)).toFixed(1) + ' MB/s'
       const pct = Math.min(100, Math.round((offset / fileSize) * 100))
 
-      onProgress?.({
+      safeProgress?.({
         bytesUploaded: offset,
         totalBytes: fileSize,
         pct,
@@ -291,12 +294,12 @@ async function uploadResumableWithProgress(
   const processingStart = Date.now()
 
   while (f.state === 'PROCESSING') {
-    if (isStopping && isStopping()) throw new Error('Upload cancelled')
+    if (safeStopping && safeStopping()) throw new Error('Upload cancelled')
     if (Date.now() > deadline) {
       throw new GeminiError('other', 'File processing timed out (20 min exceeded)')
     }
     const elapsedSec = Math.round((Date.now() - processingStart) / 1000)
-    onProgress?.({
+    safeProgress?.({
       bytesUploaded: fileSize,
       totalBytes: fileSize,
       pct: 100,
@@ -318,7 +321,7 @@ async function uploadResumableWithProgress(
     throw new GeminiError('other', `File upload failed (state=${f.state}${detail})`)
   }
 
-  onProgress?.({
+  safeProgress?.({
     bytesUploaded: fileSize,
     totalBytes: fileSize,
     pct: 100,
@@ -334,13 +337,16 @@ async function uploadResumableWithProgress(
 export async function uploadVideo(
   ai: GoogleGenAI,
   filePath: string,
-  onProgress?: (p: UploadProgress) => void,
-  isStopping?: () => boolean,
+  onProgress?: ((p: UploadProgress) => void) | unknown,
+  isStopping?: (() => boolean) | unknown,
 ): Promise<{ uri: string; name: string }> {
+  const safeProgress = typeof onProgress === 'function' ? (onProgress as (p: UploadProgress) => void) : undefined
+  const safeStopping = typeof isStopping === 'function' ? (isStopping as () => boolean) : undefined
+
   const apiKey = getApiKeyFromClient(ai) || process.env.GEMINI_API_KEY
   if (apiKey) {
     try {
-      return await uploadResumableWithProgress(apiKey, filePath, ai, onProgress, isStopping)
+      return await uploadResumableWithProgress(apiKey, filePath, ai, safeProgress, safeStopping)
     } catch (err) {
       console.warn('Resumable upload failed, falling back to ai.files.upload:', err)
     }

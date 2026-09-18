@@ -8,7 +8,7 @@ import { planMinuteSegments, stitchMinuteVerificationClips } from './batch-minut
 import { buildBatchVerifierPrompt, fmtMs } from './batch-verifier-prompt'
 import { CancelToken } from './ffmpeg-pool'
 import { sameShortSegment } from './candidate-pick'
-import type { Scan, BatchMinuteResult, BatchVerifyPart, BatchVerifyState } from './types'
+import type { Scan, BatchMinuteResult, BatchVerifyPart, BatchVerifyState, ChunkMatch } from './types'
 
 const BATCH_VERIFY_MODELS = ['gemini-3.7-flash', 'gemini-3.8-flash', 'gemini-3.6-flash']
 

@@ -15,6 +15,7 @@ import {
   CHUNK_COOLDOWN_MS,
   CHUNK_SECONDS,
   pacingIntervalMs,
+  displayModelName,
   type ModelSpec,
 } from './models'
 import {
@@ -1640,8 +1641,8 @@ class Scheduler {
           addLog(scan, 'error', `Verifier: API Key ${lane.idx} is invalid/expired — disabled for this scan; group ${g.id} re-queued for another key`)
         } else if (e.kind === 'rpd') {
           globalGeminiCoordinator.reportExhausted(lane.apiKey, m.id, 0, m.rpd)
-          setModelExhausted(m.id, lane.apiKey, m.rpd)
-          const laneState = job.scan.keyLanes.find((l) => l.idx === lane.idx)
+          setModelExhausted(m.id, lane.apiKey)
+          const laneState = job.scan.keyLanes?.find((l) => l.idx === lane.idx)
           if (laneState) {
             const ms = laneState.models.find((item) => item.id === m.id)
             if (ms) ms.state = 'exhausted'
@@ -1798,7 +1799,7 @@ class Scheduler {
             e.kind === 'rpd',
           )
           if (outcome.action === 'exhausted') {
-            setModelExhausted(m.id, lane.apiKey, m.rpd || 20)
+            setModelExhausted(m.id, lane.apiKey)
             st.state = 'exhausted'
           } else {
             job.cooldownUntil[pk] = Date.now() + CHUNK_COOLDOWN_MS
@@ -2413,7 +2414,7 @@ class Scheduler {
       let chunkFileName: string | null = null
       /** consumed backup uploads (deleted in finally) */
       const backupNames: string[] = []
-      let releaseGlobalLock: ((sec?: number) => void) | null = null
+      let releaseGlobalLock: ((sec?: number, cooldownOverrideMs?: number) => void) | null = null
       try {
         releaseGlobalLock = await globalGeminiCoordinator.acquireLane({
           scanId: scan.id,
@@ -2490,13 +2491,13 @@ class Scheduler {
           const sanitizedDir = path.join(mediaDir, 'sanitized')
           const sanitizedChunkFile = path.join(sanitizedDir, `chunk-${String(chunkIndex).padStart(4, '0')}-muted.mp4`)
           if (fs.existsSync(sanitizedChunkFile)) {
-            const sanitizedUploaded = await uploadVideo(lane.ai, sanitizedChunkFile, 'video/mp4', `chunk-${chunkIndex}-sanitized`)
+            const sanitizedUploaded = await uploadVideo(lane.ai, sanitizedChunkFile)
             backupNames.push(sanitizedUploaded.name)
             effectiveUploadedUri = sanitizedUploaded.uri
           }
           const sanitizedShortFile = path.join(sanitizedDir, `short-${String(seg.index + 1).padStart(4, '0')}-muted.mp4`)
           if (fs.existsSync(sanitizedShortFile)) {
-            const sanitizedShortUp = await uploadVideo(lane.ai, sanitizedShortFile, 'video/mp4', `short-${seg.index + 1}-sanitized`)
+            const sanitizedShortUp = await uploadVideo(lane.ai, sanitizedShortFile)
             backupNames.push(sanitizedShortUp.name)
             effectiveShortUri = sanitizedShortUp.uri
           }
@@ -2541,7 +2542,7 @@ class Scheduler {
             }
 
             const fileToUpload = fs.existsSync(sanitizedChunkFile) ? sanitizedChunkFile : originalChunkFile
-            const sanitizedUploaded = await uploadVideo(lane.ai, fileToUpload, 'video/mp4', `chunk-${chunkIndex}-sanitized`)
+            const sanitizedUploaded = await uploadVideo(lane.ai, fileToUpload)
             backupNames.push(sanitizedUploaded.name)
 
             // Prepare sanitized muted short video to remove audio triggers from short clip as well
@@ -2553,7 +2554,7 @@ class Scheduler {
                 await sanitizeVideoMute(originalShortFile, sanitizedShortFile)
               }
               if (fs.existsSync(sanitizedShortFile)) {
-                const sanitizedShortUp = await uploadVideo(lane.ai, sanitizedShortFile, 'video/mp4', `short-${seg.index + 1}-sanitized`)
+                const sanitizedShortUp = await uploadVideo(lane.ai, sanitizedShortFile)
                 backupNames.push(sanitizedShortUp.name)
                 sanitizedShortUri = sanitizedShortUp.uri
               }
@@ -2712,8 +2713,8 @@ class Scheduler {
             e.kind === 'rpd',
           )
           if (quotaOutcome.action === 'exhausted') {
-            setModelExhausted(m.id, lane.apiKey, m.rpd || 20)
-            const laneState = job.scan.keyLanes.find((l) => l.idx === lane.idx)
+            setModelExhausted(m.id, lane.apiKey)
+            const laneState = job.scan.keyLanes?.find((l) => l.idx === lane.idx)
             if (laneState) {
               const ms = laneState.models.find((item) => item.id === m.id)
               if (ms) ms.state = 'exhausted'

@@ -237,7 +237,7 @@ class GlobalGeminiCoordinator {
       throw new Error(`[Global Coordinator] Key ${keyIdx} (${modelId}) daily quota (${rpd} RPD) is exhausted for today. Skipping immediately.`)
     }
 
-    return new Promise<(actualVideoSec?: number) => void>((resolve, reject) => {
+    return new Promise<(actualVideoSec?: number, cooldownOverrideMs?: number) => void>((resolve, reject) => {
       const tryAcquireOrQueue = async () => {
         if (isStopping && isStopping()) {
           reject(new Error('Stop requested — lane acquisition cancelled'))
