@@ -41,30 +41,58 @@ export function signSession(user: SessionUser): string {
 export function verifySessionToken(token: string | undefined | null): SessionUser | null {
   if (!token) return null
   const dot = token.lastIndexOf('.')
-  if (dot <= 0) return null
+  if (dot <= 0) {
+    console.warn('[session] Malformed session token (no dot delimiter)')
+    return null
+  }
   const payload = token.slice(0, dot)
   const sig = token.slice(dot + 1)
   const expected = hmac(payload)
   const a = Buffer.from(sig)
   const b = Buffer.from(expected)
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    console.warn('[session] Session signature mismatch — token was signed with a different SESSION_SECRET or is invalid. Re-login required.')
+    return null
+  }
   try {
     const data = JSON.parse(Buffer.from(payload, 'base64url').toString()) as TokenPayload
-    if (typeof data.exp !== 'number' || data.exp < Date.now()) return null
+    if (typeof data.exp !== 'number' || data.exp < Date.now()) {
+      console.warn(`[session] Session expired for user: ${data?.u || 'unknown'}`)
+      return null
+    }
     if (typeof data.u !== 'string' || (data.r !== 'admin' && data.r !== 'user')) return null
     return { username: data.u, role: data.r }
   } catch {
+    console.warn('[session] Failed to parse session token payload')
     return null
   }
 }
 
-export function sessionCookieOptions() {
+export function sessionCookieOptions(req?: { headers?: Headers | { get(name: string): string | null } }) {
+  const site = (process.env.SITE_ADDRESS || '').trim()
+  const cookieSecureEnv = process.env.COOKIE_SECURE
+
+  let isHttps = true
+  if (cookieSecureEnv === 'false' || cookieSecureEnv === '0') {
+    isHttps = false
+  } else if (!site || site === ':80' || site.startsWith('http://')) {
+    isHttps = false
+  } else if (site.startsWith('https://') || (site && !site.includes(':') && site.includes('.'))) {
+    isHttps = true
+  }
+
+  if (req?.headers) {
+    const forwardedProto = typeof req.headers.get === 'function' ? req.headers.get('x-forwarded-proto') : null
+    if (forwardedProto === 'http') isHttps = false
+    else if (forwardedProto === 'https') isHttps = true
+  }
+
   return {
     httpOnly: true,
-    // v0 preview iframe is cross-site; SameSite=None + Secure is required
-    // for the cookie to be retained there. Also correct in production (HTTPS).
-    sameSite: (process.env.SITE_ADDRESS && process.env.SITE_ADDRESS !== ':80' ? ('none' as const) : ('lax' as const)),
-    secure: process.env.SITE_ADDRESS ? process.env.SITE_ADDRESS !== ':80' : true,
+    // SameSite=None requires Secure=true in all modern browsers.
+    // Over plain HTTP (e.g. EC2 IP without TLS), SameSite=Lax and Secure=false are required.
+    sameSite: isHttps ? ('none' as const) : ('lax' as const),
+    secure: isHttps,
     path: '/',
     maxAge: SESSION_DAYS * 24 * 60 * 60,
   }

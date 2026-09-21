@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import useSWR from 'swr'
-import { KeyRound, Check, ShieldCheck, X, Sparkles, HardDrive, RefreshCw } from 'lucide-react'
+import { KeyRound, Check, ShieldCheck, X, Sparkles, HardDrive, RefreshCw, AlertCircle, CheckCircle2 } from 'lucide-react'
 import { fetcher } from '@/lib/format'
 
 interface ModelSpecInfo {
@@ -23,10 +23,11 @@ interface KeySlot {
 }
 
 interface SettingsResponse {
-  keys: KeySlot[]
-  maxKeys: number
+  keys?: KeySlot[]
+  maxKeys?: number
   models?: ModelSpecInfo[]
   twelveLabs?: { hasKey: boolean; maskedKey: string | null }
+  error?: string
 }
 
 const MAX_SLOTS = 20
@@ -44,6 +45,8 @@ export function ApiKeyPanel() {
   const [saved, setSaved] = useState<number | null>(null)
   const [removing, setRemoving] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [slotErrors, setSlotErrors] = useState<Record<number, string>>({})
+  const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null)
   const [tlValue, setTlValue] = useState('')
   const [tlSaving, setTlSaving] = useState(false)
   const [tlSaved, setTlSaved] = useState(false)
@@ -53,47 +56,68 @@ export function ApiKeyPanel() {
   const [resettingCounters, setResettingCounters] = useState(false)
   const [reconcilingCounters, setReconcilingCounters] = useState(false)
   const [resetMsg, setResetMsg] = useState<string | null>(null)
+  const [deletingAllFiles, setDeletingAllFiles] = useState(false)
+
+  const isUnauthorized = Boolean(data?.error && data.error.toLowerCase().includes('unauthorized'))
 
   async function deleteKeyFiles(n: number) {
     if (!confirm(`Are you sure you want to delete all movie & temporary files from Gemini Files API for Key ${n}?`)) return
     setDeletingKeyStorage(n)
     setCleanMsg(null)
     setError(null)
-    const res = await fetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deleteKeyFiles: n }),
-    })
-    setDeletingKeyStorage(null)
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}))
-      setError(j.error || `Failed to delete files for Key ${n}`)
-      return
+    console.log(`[ApiKeyPanel] Deleting cloud files for Key ${n}...`)
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deleteKeyFiles: n }),
+      })
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}))
+        const msg = j.error || `Failed to delete files for Key ${n}`
+        console.error('[ApiKeyPanel] deleteKeyFiles error:', msg)
+        setError(msg)
+        return
+      }
+      const j = (await res.json().catch(() => ({}))) as { deleted?: number }
+      setCleanMsg(`Key ${n}: Deleted ${j.deleted ?? 0} file(s) from Gemini Cloud storage.`)
+      setTimeout(() => setCleanMsg(null), 5000)
+      void mutate()
+    } catch (err) {
+      console.error('[ApiKeyPanel] Exception in deleteKeyFiles:', err)
+      setError(err instanceof Error ? err.message : 'Network error deleting files')
+    } finally {
+      setDeletingKeyStorage(null)
     }
-    const j = (await res.json().catch(() => ({}))) as { deleted?: number }
-    setCleanMsg(`Key ${n}: Deleted ${j.deleted ?? 0} file(s) from Gemini Cloud storage.`)
-    setTimeout(() => setCleanMsg(null), 5000)
-    void mutate()
   }
 
   async function reconcileQuotaCounters() {
     setReconcilingCounters(true)
     setResetMsg(null)
     setError(null)
-    const res = await fetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reconcileCounters: true }),
-    })
-    setReconcilingCounters(false)
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}))
-      setError(j.error || 'Failed to sync quota')
-      return
+    console.log('[ApiKeyPanel] Reconciling quota counters...')
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reconcileCounters: true }),
+      })
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}))
+        const msg = j.error || 'Failed to sync quota'
+        console.error('[ApiKeyPanel] reconcileQuotaCounters error:', msg)
+        setError(msg)
+        return
+      }
+      setResetMsg('Quota synced: only actual successful requests today are counted; false exhaustion cleared.')
+      setTimeout(() => setResetMsg(null), 5000)
+      void mutate()
+    } catch (err) {
+      console.error('[ApiKeyPanel] Exception in reconcileQuotaCounters:', err)
+      setError(err instanceof Error ? err.message : 'Network error syncing quota')
+    } finally {
+      setReconcilingCounters(false)
     }
-    setResetMsg('Quota synced: only actual successful requests today are counted; false exhaustion cleared.')
-    setTimeout(() => setResetMsg(null), 5000)
-    void mutate()
   }
 
   async function resetQuotaCounters() {
@@ -101,103 +125,149 @@ export function ApiKeyPanel() {
     setResettingCounters(true)
     setResetMsg(null)
     setError(null)
-    const res = await fetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ resetCounters: true }),
-    })
-    setResettingCounters(false)
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}))
-      setError(j.error || 'Failed to reset daily quota counters')
-      return
+    console.log('[ApiKeyPanel] Resetting all quota counters...')
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resetCounters: true }),
+      })
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}))
+        const msg = j.error || 'Failed to reset daily quota counters'
+        console.error('[ApiKeyPanel] resetQuotaCounters error:', msg)
+        setError(msg)
+        return
+      }
+      setResetMsg('All daily quota usage counters and model exhaustion states have been reset to 0.')
+      setTimeout(() => setResetMsg(null), 5000)
+      void mutate()
+    } catch (err) {
+      console.error('[ApiKeyPanel] Exception in resetQuotaCounters:', err)
+      setError(err instanceof Error ? err.message : 'Network error resetting quota')
+    } finally {
+      setResettingCounters(false)
     }
-    setResetMsg('All daily quota usage counters and model exhaustion states have been reset to 0.')
-    setTimeout(() => setResetMsg(null), 5000)
-    void mutate()
   }
-
-  const [deletingAllFiles, setDeletingAllFiles] = useState(false)
 
   async function deleteAllCloudFiles() {
     if (!confirm('Are you sure you want to delete ALL uploaded movie & temporary files across ALL your Gemini API keys? This will free up 100% of your Gemini Files storage.')) return
     setDeletingAllFiles(true)
     setCleanMsg(null)
     setError(null)
-    const res = await fetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deleteAllFiles: true }),
-    })
-    setDeletingAllFiles(false)
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}))
-      setError(j.error || 'Failed to delete files across all keys')
-      return
+    console.log('[ApiKeyPanel] Deleting all cloud files across all keys...')
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deleteAllFiles: true }),
+      })
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}))
+        const msg = j.error || 'Failed to delete files across all keys'
+        console.error('[ApiKeyPanel] deleteAllCloudFiles error:', msg)
+        setError(msg)
+        return
+      }
+      const j = (await res.json().catch(() => ({}))) as { deleted?: number }
+      setCleanMsg(`Deleted ${j.deleted ?? 0} file(s) across all API keys. Cloud storage is clean.`)
+      setTimeout(() => setCleanMsg(null), 5000)
+      void mutate()
+    } catch (err) {
+      console.error('[ApiKeyPanel] Exception in deleteAllCloudFiles:', err)
+      setError(err instanceof Error ? err.message : 'Network error deleting all cloud files')
+    } finally {
+      setDeletingAllFiles(false)
     }
-    const j = (await res.json().catch(() => ({}))) as { deleted?: number }
-    setCleanMsg(`Deleted ${j.deleted ?? 0} file(s) across all API keys. Cloud storage is clean.`)
-    setTimeout(() => setCleanMsg(null), 5000)
-    void mutate()
   }
 
   async function cleanGeminiStorage() {
     setCleaningStorage(true)
     setCleanMsg(null)
     setError(null)
-    const res = await fetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cleanupStorage: true }),
-    })
-    setCleaningStorage(false)
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}))
-      setError(j.error || 'Failed to sweep Gemini cloud storage')
-      return
+    console.log('[ApiKeyPanel] Sweeping Gemini cloud storage...')
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cleanupStorage: true }),
+      })
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}))
+        const msg = j.error || 'Failed to sweep Gemini cloud storage'
+        console.error('[ApiKeyPanel] cleanGeminiStorage error:', msg)
+        setError(msg)
+        return
+      }
+      const j = (await res.json().catch(() => ({}))) as { deleted?: number; total?: number }
+      setCleanMsg(`Storage Cleaned: ${j.deleted ?? 0} temporary file(s) deleted from Gemini Cloud Files API (Checked ${j.total ?? 0}).`)
+      setTimeout(() => setCleanMsg(null), 5000)
+    } catch (err) {
+      console.error('[ApiKeyPanel] Exception in cleanGeminiStorage:', err)
+      setError(err instanceof Error ? err.message : 'Network error sweeping storage')
+    } finally {
+      setCleaningStorage(false)
     }
-    const j = (await res.json().catch(() => ({}))) as { deleted?: number; total?: number }
-    setCleanMsg(`Storage Cleaned: ${j.deleted ?? 0} temporary file(s) deleted from Gemini Cloud Files API (Checked ${j.total ?? 0}).`)
-    setTimeout(() => setCleanMsg(null), 5000)
   }
 
   async function saveTl() {
     const v = tlValue.trim()
-    if (!v) return
-    setTlSaving(true)
-    setError(null)
-    const res = await fetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ twelveLabsKey: v }),
-    })
-    setTlSaving(false)
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}))
-      setError(j.error || 'Failed to save Twelve Labs key')
+    if (!v) {
+      setError('Please paste a Twelve Labs API key first')
       return
     }
-    setTlValue('')
-    setTlSaved(true)
-    setTimeout(() => setTlSaved(false), 2500)
-    void mutate()
+    setTlSaving(true)
+    setError(null)
+    console.log('[ApiKeyPanel] Saving Twelve Labs key...')
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ twelveLabsKey: v }),
+      })
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}))
+        const msg = j.error || 'Failed to save Twelve Labs key'
+        console.error('[ApiKeyPanel] saveTl error:', msg)
+        setError(msg)
+        return
+      }
+      setTlValue('')
+      setTlSaved(true)
+      setTimeout(() => setTlSaved(false), 2500)
+      void mutate()
+    } catch (err) {
+      console.error('[ApiKeyPanel] Exception in saveTl:', err)
+      setError(err instanceof Error ? err.message : 'Network error saving Twelve Labs key')
+    } finally {
+      setTlSaving(false)
+    }
   }
 
   async function removeTl() {
     setTlSaving(true)
     setError(null)
-    const res = await fetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clearTwelveLabs: true }),
-    })
-    setTlSaving(false)
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}))
-      setError(j.error || 'Failed to remove Twelve Labs key')
-      return
+    console.log('[ApiKeyPanel] Removing Twelve Labs key...')
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clearTwelveLabs: true }),
+      })
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}))
+        const msg = j.error || 'Failed to remove Twelve Labs key'
+        console.error('[ApiKeyPanel] removeTl error:', msg)
+        setError(msg)
+        return
+      }
+      void mutate()
+    } catch (err) {
+      console.error('[ApiKeyPanel] Exception in removeTl:', err)
+      setError(err instanceof Error ? err.message : 'Network error removing Twelve Labs key')
+    } finally {
+      setTlSaving(false)
     }
-    void mutate()
   }
 
   const slots: KeySlot[] =
@@ -205,45 +275,165 @@ export function ApiKeyPanel() {
 
   async function save(n: number) {
     const v = (values[n] || '').trim()
-    if (!v) return
-    setSaving(n)
+    console.log(`[ApiKeyPanel] save(${n}) triggered. Input length: ${v.length}`)
+    setSlotErrors((p) => ({ ...p, [n]: '' }))
     setError(null)
-    const res = await fetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ [`apiKey${n}`]: v }),
-    })
-    setSaving(null)
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}))
-      setError(j.error || 'Failed to save key')
+
+    if (!v) {
+      const msg = 'Please paste a Gemini API key into the input field before clicking Save.'
+      console.warn(`[ApiKeyPanel] Empty key entered for Slot ${n}`)
+      setSlotErrors((p) => ({ ...p, [n]: msg }))
+      setError(msg)
       return
     }
-    setValues((p) => ({ ...p, [n]: '' }))
-    setSaved(n)
-    setTimeout(() => setSaved(null), 2500)
-    void mutate()
+
+    if (v.length < 10) {
+      const msg = 'Key too short. Gemini API keys are typically ~39 characters long.'
+      console.warn(`[ApiKeyPanel] Short key entered for Slot ${n}: ${v.length} chars`)
+      setSlotErrors((p) => ({ ...p, [n]: msg }))
+      setError(msg)
+      return
+    }
+
+    setSaving(n)
+    try {
+      console.log(`[ApiKeyPanel] Sending POST /api/settings for slot ${n}...`)
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [`apiKey${n}`]: v }),
+      })
+      console.log(`[ApiKeyPanel] POST /api/settings response status: ${res.status}`)
+
+      if (res.status === 401) {
+        const msg = 'Session expired or unauthorized cookie. Please refresh the page and log in again.'
+        console.warn('[ApiKeyPanel] 401 Unauthorized from /api/settings')
+        setError(msg)
+        setSlotErrors((p) => ({ ...p, [n]: msg }))
+        return
+      }
+
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}))
+        const msg = j.error || `Failed to save key ${n} (HTTP ${res.status})`
+        console.error(`[ApiKeyPanel] Error saving key ${n}:`, msg)
+        setError(msg)
+        setSlotErrors((p) => ({ ...p, [n]: msg }))
+        return
+      }
+
+      console.log(`[ApiKeyPanel] Key ${n} saved successfully`)
+      setValues((p) => ({ ...p, [n]: '' }))
+      setSaved(n)
+      setSaveSuccessMsg(`API Key ${n} saved successfully!`)
+      setTimeout(() => setSaved(null), 3000)
+      setTimeout(() => setSaveSuccessMsg(null), 4500)
+      void mutate()
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Network failure while saving API key'
+      console.error(`[ApiKeyPanel] Exception saving key ${n}:`, err)
+      setError(`Network error: ${msg}`)
+      setSlotErrors((p) => ({ ...p, [n]: msg }))
+    } finally {
+      setSaving(null)
+    }
   }
 
   async function remove(n: number) {
+    if (!confirm(`Are you sure you want to remove API Key ${n}?`)) return
     setRemoving(n)
     setError(null)
-    const res = await fetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clear: n }),
-    })
-    setRemoving(null)
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}))
-      setError(j.error || 'Failed to remove key')
-      return
+    setSlotErrors((p) => ({ ...p, [n]: '' }))
+    console.log(`[ApiKeyPanel] Removing API Key ${n}...`)
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clear: n }),
+      })
+      console.log(`[ApiKeyPanel] Remove key ${n} response status: ${res.status}`)
+
+      if (res.status === 401) {
+        const msg = 'Session expired. Please log in again.'
+        setError(msg)
+        return
+      }
+
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}))
+        const msg = j.error || `Failed to remove key ${n}`
+        console.error(`[ApiKeyPanel] Error removing key ${n}:`, msg)
+        setError(msg)
+        return
+      }
+      setSaveSuccessMsg(`API Key ${n} removed.`)
+      setTimeout(() => setSaveSuccessMsg(null), 3500)
+      void mutate()
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Network error removing key'
+      console.error(`[ApiKeyPanel] Exception removing key ${n}:`, err)
+      setError(msg)
+    } finally {
+      setRemoving(null)
     }
-    void mutate()
   }
 
   return (
     <section aria-label="API key settings" className="panel">
+      {/* ---------- Top Alert Banners ---------- */}
+      {isUnauthorized && (
+        <div className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive flex items-start gap-2.5">
+          <AlertCircle className="size-4 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="font-semibold">Authentication required or session expired</p>
+            <p className="mt-0.5 text-muted-foreground">
+              Your session cookie is missing or invalid. Please refresh the page or log in again to manage API keys.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="rounded bg-destructive px-2.5 py-1 text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
+          >
+            Refresh
+          </button>
+        </div>
+      )}
+
+      {error && (
+        <div className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive flex items-start justify-between gap-2">
+          <div className="flex items-start gap-2">
+            <AlertCircle className="size-4 shrink-0 mt-0.5" />
+            <span className="font-medium">{error}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setError(null)}
+            className="text-destructive hover:opacity-75 shrink-0"
+            aria-label="Dismiss error"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+      )}
+
+      {saveSuccessMsg && (
+        <div className="mb-4 rounded-md border border-success/40 bg-success/10 p-3 text-xs text-success flex items-start justify-between gap-2">
+          <div className="flex items-start gap-2">
+            <CheckCircle2 className="size-4 shrink-0 mt-0.5" />
+            <span className="font-medium">{saveSuccessMsg}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSaveSuccessMsg(null)}
+            className="text-success hover:opacity-75 shrink-0"
+            aria-label="Dismiss message"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+      )}
+
       {slots.map((slot) => {
         const n = slot.index
         const Icon = n === 1 ? KeyRound : ShieldCheck
@@ -272,7 +462,10 @@ export function ApiKeyPanel() {
               <input
                 type="password"
                 value={values[n] || ''}
-                onChange={(e) => setValues((p) => ({ ...p, [n]: e.target.value }))}
+                onChange={(e) => {
+                  setValues((p) => ({ ...p, [n]: e.target.value }))
+                  if (slotErrors[n]) setSlotErrors((p) => ({ ...p, [n]: '' }))
+                }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) save(n)
                 }}
@@ -307,6 +500,12 @@ export function ApiKeyPanel() {
                 </button>
               )}
             </div>
+            {slotErrors[n] && (
+              <p className="mt-1.5 flex items-center gap-1.5 text-xs text-destructive font-medium">
+                <AlertCircle className="size-3.5 shrink-0" aria-hidden />
+                {slotErrors[n]}
+              </p>
+            )}
 
             {/* ---------- Per-Key Daily Usage Tracking ---------- */}
             {slot.hasKey && (

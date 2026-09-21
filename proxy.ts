@@ -20,6 +20,7 @@ export function proxy(request: NextRequest) {
 
   const session = verifySessionToken(request.cookies.get(SESSION_COOKIE)?.value)
   if (!session) {
+    console.warn(`[proxy] Blocked unauthenticated ${request.method} ${pathname} (missing or invalid ${SESSION_COOKIE} cookie)`)
     return NextResponse.json({ error: 'Unauthorized — please log in' }, { status: 401 })
   }
 

@@ -29,7 +29,11 @@ function mask(key: string) {
 
 export async function GET() {
   const session = await getSession()
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!session) {
+    console.warn('[api/settings GET] Unauthenticated request rejected (401)')
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  console.log(`[api/settings GET] User "${session.username}" retrieved settings`)
 
   // Reconcile and cleanse today's counters and spurious exhaustion flags
   try {
@@ -149,119 +153,159 @@ export async function PATCH(req: Request) {
 
 export async function POST(req: Request) {
   const session = await getSession()
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!session) {
+    console.warn('[api/settings POST] Unauthenticated request rejected (401) — missing or invalid session cookie')
+    return NextResponse.json({ error: 'Unauthorized — please log in again' }, { status: 401 })
+  }
   const username = session.username
 
-  const body = (await req.json()) as Record<string, unknown>
-
-  // ----- Verifier toggle -----
-  if (body.verifierEnabled !== undefined) {
-    const enabled = Boolean(body.verifierEnabled)
-    await setUserVerifierEnabled(username, enabled)
-    return NextResponse.json({ ok: true, verifierEnabled: enabled })
+  let body: Record<string, unknown>
+  try {
+    body = (await req.json()) as Record<string, unknown>
+  } catch (err) {
+    console.warn(`[api/settings POST] Invalid JSON payload from ${username}:`, err)
+    return NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 })
   }
 
-  // ----- Minute finder toggle (also accepted via POST for older clients) -----
-  if (body.minuteFinder !== undefined) {
-    if (!isMinuteFinderMode(body.minuteFinder)) {
-      return NextResponse.json({ error: 'minuteFinder must be gemini | twelvelabs | off' }, { status: 400 })
+  console.log(`[api/settings POST] User "${username}" submitted settings update:`, Object.keys(body))
+
+  try {
+    // ----- Verifier toggle -----
+    if (body.verifierEnabled !== undefined) {
+      const enabled = Boolean(body.verifierEnabled)
+      await setUserVerifierEnabled(username, enabled)
+      console.log(`[api/settings POST] User "${username}" set verifierEnabled=${enabled}`)
+      return NextResponse.json({ ok: true, verifierEnabled: enabled })
     }
-    await setUserMinuteFinderMode(username, body.minuteFinder)
-    return NextResponse.json({ ok: true })
-  }
 
-  // ----- Twelve Labs key (optional pre-filter): { twelveLabsKey } / { clearTwelveLabs: true } -----
-  if (body.clearTwelveLabs === true) {
-    await clearUserTwelveLabsKey(username)
-    return NextResponse.json({ ok: true })
-  }
-  if (typeof body.twelveLabsKey === 'string') {
-    const key = body.twelveLabsKey.trim()
-    if (key.length < 10) {
-      return NextResponse.json({ error: 'Invalid Twelve Labs API key' }, { status: 400 })
+    // ----- Minute finder toggle (also accepted via POST for older clients) -----
+    if (body.minuteFinder !== undefined) {
+      if (!isMinuteFinderMode(body.minuteFinder)) {
+        console.warn(`[api/settings POST] Invalid minuteFinder mode from ${username}:`, body.minuteFinder)
+        return NextResponse.json({ error: 'minuteFinder must be gemini | twelvelabs | off' }, { status: 400 })
+      }
+      await setUserMinuteFinderMode(username, body.minuteFinder)
+      console.log(`[api/settings POST] User "${username}" set minuteFinder=${body.minuteFinder}`)
+      return NextResponse.json({ ok: true })
     }
-    await setUserTwelveLabsKey(username, key)
-    return NextResponse.json({ ok: true })
-  }
 
-  // ----- Delete all files on a single key: { deleteKeyFiles: number } -----
-  if (typeof body.deleteKeyFiles === 'number') {
-    const keyIdx = body.deleteKeyFiles
-    const k = await getUserKeyN(username, keyIdx)
-    if (!k) return NextResponse.json({ error: `Key ${keyIdx} not found` }, { status: 404 })
-    const res = await deleteAllFilesOnKey(k)
-    return NextResponse.json({ ok: true, keyIndex: keyIdx, deleted: res.deleted })
-  }
+    // ----- Twelve Labs key (optional pre-filter): { twelveLabsKey } / { clearTwelveLabs: true } -----
+    if (body.clearTwelveLabs === true) {
+      await clearUserTwelveLabsKey(username)
+      console.log(`[api/settings POST] User "${username}" cleared Twelve Labs key`)
+      return NextResponse.json({ ok: true })
+    }
+    if (typeof body.twelveLabsKey === 'string') {
+      const key = body.twelveLabsKey.trim()
+      if (key.length < 10) {
+        console.warn(`[api/settings POST] User "${username}" supplied invalid Twelve Labs key length: ${key.length}`)
+        return NextResponse.json({ error: 'Invalid Twelve Labs API key' }, { status: 400 })
+      }
+      await setUserTwelveLabsKey(username, key)
+      console.log(`[api/settings POST] User "${username}" saved Twelve Labs key (${mask(key)})`)
+      return NextResponse.json({ ok: true })
+    }
 
-  // ----- On-demand Gemini storage sweep: { cleanupStorage: true } / { deleteAllFiles: true } -----
-  if (body.cleanupStorage === true || body.deleteAllFiles === true) {
-    const keys = await getAllUserApiKeys(username)
-    let totalDeleted = 0
-    for (const k of keys) {
+    // ----- Delete all files on a single key: { deleteKeyFiles: number } -----
+    if (typeof body.deleteKeyFiles === 'number') {
+      const keyIdx = body.deleteKeyFiles
+      const k = await getUserKeyN(username, keyIdx)
+      if (!k) {
+        console.warn(`[api/settings POST] User "${username}" requested delete for Key ${keyIdx} but key not found`)
+        return NextResponse.json({ error: `Key ${keyIdx} not found` }, { status: 404 })
+      }
       const res = await deleteAllFilesOnKey(k)
-      totalDeleted += res.deleted
+      console.log(`[api/settings POST] User "${username}" deleted ${res.deleted} file(s) for Key ${keyIdx}`)
+      return NextResponse.json({ ok: true, keyIndex: keyIdx, deleted: res.deleted })
     }
-    return NextResponse.json({ ok: true, deleted: totalDeleted, total: totalDeleted })
-  }
 
-  // ----- Reset daily quota counters: { resetCounters: true } -----
-  if (body.resetCounters === true) {
-    const { resetAllDailyCounters, clearAllExhaustedFlags } = await import('@/lib/store')
-    const { globalGeminiCoordinator } = await import('@/lib/global-gemini-coordinator')
-    resetAllDailyCounters()
-    clearAllExhaustedFlags()
-    globalGeminiCoordinator.resetAllLanes()
-    return NextResponse.json({ ok: true, message: 'All daily quota counters and coordinator lanes have been reset to 0' })
-  }
-
-  // ----- Reconcile counters from today's real scans: { reconcileCounters: true } -----
-  if (body.reconcileCounters === true) {
-    const { reconcileTodayCounters, clearAllExhaustedFlags } = await import('@/lib/store')
-    const { globalGeminiCoordinator } = await import('@/lib/global-gemini-coordinator')
-    clearAllExhaustedFlags()
-    globalGeminiCoordinator.resetAllLanes()
-    reconcileTodayCounters()
-    return NextResponse.json({ ok: true, message: 'Counters successfully reconciled from today’s completed scans' })
-  }
-
-  // ----- Clear a key slot: { clear: n } -----
-  if (typeof body.clear === 'number') {
-    const n = body.clear
-    if (!Number.isInteger(n) || n < 1 || n > MAX_API_KEYS) {
-      return NextResponse.json({ error: 'Invalid key slot' }, { status: 400 })
+    // ----- On-demand Gemini storage sweep: { cleanupStorage: true } / { deleteAllFiles: true } -----
+    if (body.cleanupStorage === true || body.deleteAllFiles === true) {
+      const keys = await getAllUserApiKeys(username)
+      let totalDeleted = 0
+      for (const k of keys) {
+        const res = await deleteAllFilesOnKey(k)
+        totalDeleted += res.deleted
+      }
+      console.log(`[api/settings POST] User "${username}" storage cleanup deleted ${totalDeleted} files across ${keys.length} keys`)
+      return NextResponse.json({ ok: true, deleted: totalDeleted, total: totalDeleted })
     }
-    await clearUserKeyN(username, n)
-    return NextResponse.json({ ok: true })
-  }
 
-  // ----- Save keys: accepts apiKey/apiKey1 ... apiKey20, any combination -----
-  const updates: { n: number; key: string }[] = []
-  for (let n = 1; n <= MAX_API_KEYS; n++) {
-    const raw = n === 1 ? (body.apiKey1 ?? body.apiKey) : body[`apiKey${n}`]
-    const key = typeof raw === 'string' ? raw.trim() : ''
-    if (key) updates.push({ n, key })
-  }
-  if (updates.length === 0) {
-    return NextResponse.json({ error: 'No API key provided' }, { status: 400 })
-  }
-
-  // Validate each key: length + must be DIFFERENT from every other slot (same key = no extra quota).
-  for (const u of updates) {
-    if (u.key.length < 10) {
-      return NextResponse.json({ error: `Invalid API key ${u.n}` }, { status: 400 })
+    // ----- Reset daily quota counters: { resetCounters: true } -----
+    if (body.resetCounters === true) {
+      const { resetAllDailyCounters, clearAllExhaustedFlags } = await import('@/lib/store')
+      const { globalGeminiCoordinator } = await import('@/lib/global-gemini-coordinator')
+      resetAllDailyCounters()
+      clearAllExhaustedFlags()
+      globalGeminiCoordinator.resetAllLanes()
+      console.log(`[api/settings POST] User "${username}" reset all daily quota counters and lanes`)
+      return NextResponse.json({ ok: true, message: 'All daily quota counters and coordinator lanes have been reset to 0' })
     }
-    for (let other = 1; other <= MAX_API_KEYS; other++) {
-      if (other === u.n) continue
-      const otherKey = updates.find((x) => x.n === other)?.key ?? (await getUserKeyN(username, other))
-      if (otherKey && otherKey === u.key) {
-        return NextResponse.json(
-          { error: `Key ${u.n} must be DIFFERENT from Key ${other} — the same key gives no extra quota` },
-          { status: 400 },
-        )
+
+    // ----- Reconcile counters from today's real scans: { reconcileCounters: true } -----
+    if (body.reconcileCounters === true) {
+      const { reconcileTodayCounters, clearAllExhaustedFlags } = await import('@/lib/store')
+      const { globalGeminiCoordinator } = await import('@/lib/global-gemini-coordinator')
+      clearAllExhaustedFlags()
+      globalGeminiCoordinator.resetAllLanes()
+      reconcileTodayCounters()
+      console.log(`[api/settings POST] User "${username}" reconciled quota counters`)
+      return NextResponse.json({ ok: true, message: 'Counters successfully reconciled from today’s completed scans' })
+    }
+
+    // ----- Clear a key slot: { clear: n } -----
+    if (typeof body.clear === 'number') {
+      const n = body.clear
+      if (!Number.isInteger(n) || n < 1 || n > MAX_API_KEYS) {
+        console.warn(`[api/settings POST] User "${username}" clear invalid slot: ${n}`)
+        return NextResponse.json({ error: 'Invalid key slot' }, { status: 400 })
+      }
+      await clearUserKeyN(username, n)
+      console.log(`[api/settings POST] User "${username}" cleared Key slot ${n}`)
+      return NextResponse.json({ ok: true })
+    }
+
+    // ----- Save keys: accepts apiKey/apiKey1 ... apiKey20, any combination -----
+    const updates: { n: number; key: string }[] = []
+    for (let n = 1; n <= MAX_API_KEYS; n++) {
+      const raw = n === 1 ? (body.apiKey1 ?? body.apiKey) : body[`apiKey${n}`]
+      const key = typeof raw === 'string' ? raw.trim() : ''
+      if (key) updates.push({ n, key })
+    }
+    if (updates.length === 0) {
+      console.warn(`[api/settings POST] User "${username}" submitted request with no valid API key`)
+      return NextResponse.json({ error: 'No API key provided' }, { status: 400 })
+    }
+
+    // Validate each key: length + must be DIFFERENT from every other slot (same key = no extra quota).
+    for (const u of updates) {
+      if (u.key.length < 10) {
+        console.warn(`[api/settings POST] User "${username}" provided short key for slot ${u.n} (len ${u.key.length})`)
+        return NextResponse.json({ error: `Invalid API key ${u.n} (too short, min 10 characters)` }, { status: 400 })
+      }
+      for (let other = 1; other <= MAX_API_KEYS; other++) {
+        if (other === u.n) continue
+        const otherKey = updates.find((x) => x.n === other)?.key ?? (await getUserKeyN(username, other))
+        if (otherKey && otherKey === u.key) {
+          console.warn(`[api/settings POST] User "${username}" duplicate key: slot ${u.n} is same as slot ${other}`)
+          return NextResponse.json(
+            { error: `Key ${u.n} must be DIFFERENT from Key ${other} — the same key gives no extra quota` },
+            { status: 400 },
+          )
+        }
       }
     }
-  }
 
-  for (const u of updates) await setUserKeyN(username, u.n, u.key)
-  return NextResponse.json({ ok: true })
+    for (const u of updates) {
+      await setUserKeyN(username, u.n, u.key)
+      console.log(`[api/settings POST] User "${username}" successfully saved API key for Slot ${u.n} (${mask(u.key)})`)
+    }
+    return NextResponse.json({ ok: true })
+  } catch (err) {
+    console.error(`[api/settings POST] Exception while handling request for ${username}:`, err)
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Internal server error saving settings' },
+      { status: 500 },
+    )
+  }
 }

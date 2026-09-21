@@ -1,13 +1,11 @@
-import { NextResponse } from 'next/server'
-import { SESSION_COOKIE } from '@/lib/session'
+import { type NextRequest, NextResponse } from 'next/server'
+import { SESSION_COOKIE, sessionCookieOptions } from '@/lib/session'
 
-export async function POST() {
+export async function POST(request: NextRequest) {
   const res = NextResponse.json({ ok: true })
+  const opts = sessionCookieOptions(request)
   res.cookies.set(SESSION_COOKIE, '', {
-    httpOnly: true,
-    sameSite: 'none',
-    secure: true,
-    path: '/',
+    ...opts,
     maxAge: 0,
   })
   return res
